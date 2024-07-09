@@ -1,0 +1,141 @@
+pyranometer_project/
+├── main.py
+├── static/
+│   ├── style.css
+├── templates/
+│   ├── index.html
+└── data_processing.py
+from fastapi import FastAPI, Request
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from data_processing import get_pyranos_data
+
+app = FastAPI()
+templates = Jinja2Templates(directory="templates")
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+@app.get("/")
+def read_root(request: Request):
+    data = get_pyranos_data()
+    return templates.TemplateResponse("index.html", {"request": request, "data": data})
+import os
+import numpy as np
+from datetime import datetime, timedelta
+
+class Pyranos(object):
+    def __init__(self, start_date=(2024,1,1), end_date=(2024,1,30)):
+        folder_path = "Data/"
+        folder = os.listdir(folder_path)
+        files_list = []
+
+        time = []
+        temp = []
+        windspeed = []
+        winddirection = []
+        windspeed_flag = []
+        self.date_times = []
+
+        start_date = datetime(*start_date)
+        end_date = datetime(*end_date)
+        for file_name in folder:
+            files_list.append(file_name)
+        selected_dates = [string for string in files_list if start_date <= self.extract_date(string) <= end_date]
+        print(selected_dates)
+        for date in selected_dates:
+            with open(os.path.join(folder_path, date), 'r') as file:
+                reference_date = datetime.strptime(date[2:8], '%y%m%d')
+                for line in file:
+                    parts = line.strip().split(',')
+                    self.date_times.append(self.value_to_datetime(parts[3], reference_date))
+                    time.append(parts[3])
+                    temp.append(parts[7])
+                    windspeed_value = float(parts[23])
+                    windspeed.append(windspeed_value)
+                    winddirection.append(parts[24])
+                    windspeed_flag.append(windspeed_value > 2.5)
+
+        self.time = np.array(time, dtype=float)
+        self.temp = np.array(temp, dtype=float)
+        self.windspeed = np.array(windspeed, dtype=float)
+        self.winddirection = np.array(winddirection, dtype=float)
+        self.windspeed_flag = np.array(windspeed_flag, dtype=bool)
+
+    def extract_date(self, filename):
+        return datetime.strptime(filename[2:8], '%y%m%d')
+
+    def value_to_datetime(self, value, reference_date):
+        return reference_date + timedelta(seconds=float(value))
+
+# Beispielaufruf
+def get_pyranos_data():
+    p = Pyranos()
+    return {
+        "time": p.time.tolist(),
+        "temp": p.temp.tolist(),
+        "windspeed": p.windspeed.tolist(),
+        "winddirection": p.winddirection.tolist(),
+        "windspeed_flag": p.windspeed_flag.tolist()
+    }
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Pyranometer Data</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <h1>Pyranometer Data</h1>
+    <div id="windspeed" class="{{ 'green' if data['windspeed_flag'][-1] else 'red' }}">
+        Wind Speed: {{ data['windspeed'][-1] }} m/s
+    </div>
+    <div id="windrose">
+        <!-- Placeholder for Windrose -->
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>
+        const winddirection = {{ data['winddirection']|tojson }};
+        const ctx = document.getElementById('windrose').getContext('2d');
+        const data = {
+            labels: ['N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE', 'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW'],
+            datasets: [{
+                label: 'Wind Direction',
+                data: winddirection, // Array of wind direction values
+                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                borderColor: 'rgba(255, 99, 132, 1)',
+                borderWidth: 1
+            }]
+        };
+        const config = {
+            type: 'polarArea',
+            data: data,
+        };
+        const windRoseChart = new Chart(ctx, config);
+    </script>
+</body>
+</html>
+body {
+    font-family: Arial, sans-serif;
+}
+
+.green {
+    background-color: green;
+    color: white;
+}
+
+.red {
+    background-color: red;
+    color: white;
+}
+
+#windspeed {
+    padding: 10px;
+    margin: 10px 0;
+}
+
+#windrose {
+    width: 400px;
+    height: 400px;
+    border: 1px solid #000;
+}
+uvicorn main:app --reload
